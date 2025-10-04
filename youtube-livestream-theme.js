@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         YouTube Live Theme
-// @namespace    https://github.com/ModlabsCC/Scripts
-// @version      1.0.0
+// @namespace    ModLabs
+// @version      1.0.0-GitHUb
 // @description  Removes the progress bar from YouTube live streams.
-// @author       ModLabsCC
+// @license      Apache License 2.0
+// @author       ModLabs
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
 // @grant        none
