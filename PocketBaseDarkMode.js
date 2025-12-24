@@ -3,6 +3,7 @@
 // @namespace   ModLabs
 // @version     1.0.0
 // @description Adds a simple css inject that inverts the colors except for images on PocketBase UI.
+// @license     Apache License 2.0
 // @author      ModLabs
 // @match       *://*/*
 // @grant       none
