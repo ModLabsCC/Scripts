@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        PocketBase Dark Mode
 // @namespace   ModLabs
-// @version     1.0.0
+// @version     1.0.0-GitHub
 // @description Adds a simple css inject that inverts the colors except for images on PocketBase UI.
 // @license     Apache License 2.0
 // @author      ModLabs
