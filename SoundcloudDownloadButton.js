@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Soundcloud Download Button
 // @namespace    ModLabs
-// @version      1.2.0-GitHub
+// @version      1.3.0-GitHub
 // @description  A Script that adds a Download button to SoundCloud
 // @author       ModLabs
 // @license      Apache License 2.0
@@ -15,12 +15,15 @@
   const toolbarSelector = '.listenEngagement__actions .sc-button-group';
   let button;
   let label;
+  let icon;
   let currentPath;
   let request;
   let resetTimer;
 
   function getDownload() {
-    const match = location.pathname.match(/^\/([^/]+)\/(?:sets\/([^/]+)|([^/]+))\/?$/);
+    // The new track UI lives in a /n/ iframe; userscript managers run us there too.
+    const pathname = location.pathname.replace(/^\/n\//, '/');
+    const match = pathname.match(/^\/([^/]+)\/(?:sets\/([^/]+)|([^/]+))\/?$/);
     if (!match || (!match[2] && match[3] === 'sets')) return null;
     const playlist = Boolean(match[2]);
     const slug = match[2] || match[3];
@@ -36,6 +39,48 @@
     if (label.textContent !== text) label.textContent = text;
     button.title = title;
     button.setAttribute('aria-label', title);
+    const state = text === 'Downloading…' ? 'loading' :
+      text === 'Download complete!' ? 'complete' : text === 'Retry download' ? 'error' : 'ready';
+    if (button.dataset.state !== state) {
+      button.dataset.state = state;
+      const paths = {
+        ready: '<path d="M12 3.75V15M7.5 10.5 12 15l4.5-4.5M3.75 15.75v4.5h16.5v-4.5"/>',
+        loading: '<circle cx="12" cy="12" r="8.25" stroke-dasharray="36 16"/>',
+        complete: '<path d="m5.25 12 4.5 4.5 9-9"/>',
+        error: '<path d="M18.75 8.25A7.5 7.5 0 1 0 19.5 12M18.75 3.75v4.5h-4.5"/>'
+      };
+      icon.innerHTML = paths[state];
+    }
+  }
+
+  function getToolbar() {
+    const menu = document.querySelector('[aria-label="Track-Header"] button[id^="desktop-menu-button-"][aria-haspopup="true"]');
+    if (menu) return { element: menu.parentElement, reference: menu, modern: true };
+    const element = document.querySelector(toolbarSelector);
+    return element && { element, modern: false };
+  }
+
+  function styleButton(toolbar) {
+    const ui = toolbar.modern ? 'modern' : 'legacy';
+    const className = toolbar.modern ? toolbar.reference.className :
+      'sc-button-secondary sc-button sc-button-medium';
+    if (button.dataset.ui === ui && button.className === className) return;
+    button.dataset.ui = ui;
+    // Reuse the live MUI classes, including theme/hover states, rather than hashed selectors.
+    button.className = className;
+    if (toolbar.modern) {
+      button.setAttribute('variant', 'outlined');
+      button.style.cssText = 'flex-shrink:0';
+      icon.setAttribute('width', '24');
+      icon.setAttribute('height', '24');
+      label.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap';
+    } else {
+      button.removeAttribute('variant');
+      button.style.cssText = 'display:inline-flex;align-items:center;gap:6px;white-space:nowrap';
+      icon.setAttribute('width', '16');
+      icon.setAttribute('height', '16');
+      label.style.cssText = '';
+    }
   }
 
   async function download() {
@@ -93,7 +138,7 @@
 
   function syncButton() {
     const target = getDownload();
-    const toolbar = target && document.querySelector(toolbarSelector);
+    const toolbar = target && getToolbar();
     if (target?.path !== currentPath) {
       request?.abort();
       request = null;
@@ -113,16 +158,38 @@
       button = document.createElement('button');
       button.type = 'button';
       button.id = 'scr-download-button';
-      button.className = 'sc-button-secondary sc-button sc-button-medium';
-      button.style.cssText = 'display:inline-flex;align-items:center;gap:6px;white-space:nowrap';
-      button.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1v9m-3-3 3 3 3-3M2 10v4h12v-4"/></svg>';
+      icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('viewBox', '0 0 24 24');
+      icon.setAttribute('aria-hidden', 'true');
+      icon.setAttribute('fill', 'none');
+      icon.setAttribute('stroke', 'currentColor');
+      icon.setAttribute('stroke-width', '1.5');
+      icon.setAttribute('stroke-linecap', 'square');
+      button.appendChild(icon);
       label = document.createElement('span');
+      label.setAttribute('aria-live', 'polite');
       button.appendChild(label);
       setLabel(target.label);
       button.addEventListener('click', download);
     }
-    if (button.parentElement !== toolbar) toolbar.prepend(button);
+    styleButton(toolbar);
+    if (button.parentElement !== toolbar.element) {
+      if (toolbar.modern) toolbar.element.insertBefore(button, toolbar.reference);
+      else toolbar.element.prepend(button);
+    }
   }
+
+  const style = document.createElement('style');
+  style.textContent = `
+    #scr-download-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+    #scr-download-button:disabled { opacity: .55; cursor: wait; }
+    #scr-download-button[data-state="loading"] svg { animation: scr-download-spin 1s linear infinite; }
+    @keyframes scr-download-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      #scr-download-button[data-state="loading"] svg { animation: none; }
+    }
+  `;
+  document.documentElement.appendChild(style);
 
   let scheduled = false;
   const observer = new MutationObserver(() => {
