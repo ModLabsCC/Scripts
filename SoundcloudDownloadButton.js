@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Soundcloud Download Button
 // @namespace    ModLabs
-// @version      1.3.1-GitHub
+// @version      1.3.2-GitHub
 // @description  A Script that adds a Download button to SoundCloud
 // @author       ModLabs
 // @license      Apache License 2.0
@@ -12,7 +12,7 @@
 (function () {
   'use strict';
 
-  const toolbarSelector = '.listenEngagement__actions .sc-button-group';
+  const toolbarSelector = '.listenEngagement__actions .sc-button-group, .systemPlaylistDetails__controls';
   let button;
   let label;
   let icon;
@@ -30,9 +30,30 @@
     return {
       path: `/${match[1]}/${playlist ? 'sets/' : ''}${slug}`,
       label: playlist ? 'Download Playlist' : 'Download',
-      filename: `${match[1]} - ${slug}.${playlist ? 'm3u8' : 'mp3'}`,
-      playlist
+      filename: `${match[1]} - ${slug.replace(/:/g, '_')}.${playlist ? 'm3u8' : 'mp3'}`,
+      playlist,
+      systemPlaylist: playlist && match[1] === 'discover'
     };
+  }
+
+  function getSystemPlaylistBlob() {
+    const tracks = [...document.querySelectorAll('.systemPlaylistTrackList__list .trackItem__trackTitle')];
+    const count = Number(document.querySelector('.systemPlaylistTrackCount .genericTrackCount__title')?.textContent.replace(/\D/g, ''));
+    if (!tracks.length) throw new Error('The playlist tracks have not loaded yet. Please try again.');
+    if (count > tracks.length) throw new Error('Scroll to the end of the playlist to load all tracks, then retry.');
+
+    // The download service cannot resolve /discover/sets; use its individual track endpoints.
+    const lines = ['#EXTM3U'];
+    for (const track of tracks) {
+      const url = new URL(track.href, location.origin);
+      if (url.origin !== location.origin || !/^\/[^/]+\/[^/]+\/?$/.test(url.pathname)) {
+        throw new Error('The playlist contains an invalid track link.');
+      }
+      const artist = track.closest('.trackItem')?.querySelector('.trackItem__username')?.textContent.trim();
+      const title = [artist, track.textContent.trim()].filter(Boolean).join(' - ').replace(/[\r\n]+/g, ' ');
+      lines.push(`#EXTINF:-1,${title}`, `https://api.modlabs.cc/scr${url.pathname.replace(/\/$/, '')}`);
+    }
+    return new Blob([`${lines.join('\n')}\n`], { type: 'application/vnd.apple.mpegurl' });
   }
 
   function setLabel(text, title = text) {
@@ -101,13 +122,18 @@
     const timeout = setTimeout(() => controller.abort(), 120000);
 
     try {
-      const response = await fetch(`https://api.modlabs.cc/scr${target.path}`, {
-        signal: controller.signal
-      });
-      if (!response.ok) throw new Error(`Download service returned HTTP ${response.status}.`);
-      const type = (response.headers.get('content-type') || '').toLowerCase();
-      if (/json|html/.test(type)) throw new Error('Download service returned an error instead of a file.');
-      const blob = await response.blob();
+      let blob;
+      if (target.systemPlaylist) {
+        blob = getSystemPlaylistBlob();
+      } else {
+        const response = await fetch(`https://api.modlabs.cc/scr${target.path}`, {
+          signal: controller.signal
+        });
+        if (!response.ok) throw new Error(`Download service returned HTTP ${response.status}.`);
+        const type = (response.headers.get('content-type') || '').toLowerCase();
+        if (/json|html/.test(type)) throw new Error('Download service returned an error instead of a file.');
+        blob = await response.blob();
+      }
       if (!blob.size) throw new Error('Download service returned an empty file.');
       if (target.playlist && !(await blob.text()).trimStart().startsWith('#EXTM3U')) {
         throw new Error('Download service returned an invalid playlist.');
@@ -189,6 +215,7 @@
 
   const style = document.createElement('style');
   style.textContent = `
+    .systemPlaylistDetails__controls > #scr-download-button { margin-right: 10px; }
     #scr-download-button[data-ui="legacy"]:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
     #scr-download-button[data-ui="legacy"]:disabled { opacity: .55; cursor: wait; }
     #scr-download-button[data-state="loading"] svg { animation: scr-download-spin 1s linear infinite; }
