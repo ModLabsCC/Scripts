@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Soundcloud Download Button
 // @namespace    ModLabs
-// @version      1.3.3-GitHub
+// @version      1.3.4-GitHub
 // @description  A Script that adds a Download button to SoundCloud
 // @author       ModLabs
 // @license      Apache License 2.0
@@ -15,16 +15,12 @@
   'use strict';
 
   const toolbarSelector = '.listenEngagement__actions .sc-button-group, .systemPlaylistDetails__controls';
+  const downloads = new Map();
   let button;
-  let label;
-  let icon;
-  let currentPath;
-  let request;
-  let resetTimer;
 
-  function getDownload() {
+  function getDownload(pathname = location.pathname) {
     // The new track UI lives in a /n/ iframe; userscript managers run us there too.
-    const pathname = location.pathname.replace(/^\/n\//, '/');
+    pathname = pathname.replace(/^\/n\//, '/');
     const match = pathname.match(/^\/([^/]+)\/(?:sets\/([^/]+)|([^/]+))\/?$/);
     if (!match || (!match[2] && match[3] === 'sets')) return null;
     const playlist = Boolean(match[2]);
@@ -36,6 +32,17 @@
       playlist,
       systemPlaylist: playlist && match[1] === 'discover'
     };
+  }
+
+  function getLinkDownload(link, album = false) {
+    if (!link) return null;
+    const url = new URL(link.href, location.origin);
+    if (url.origin !== location.origin) return null;
+    const target = getDownload(url.pathname);
+    // Personalized sets need their complete detail page, not a feed preview.
+    if (!target || target.systemPlaylist) return null;
+    target.label = target.playlist ? (album ? 'Download Album' : 'Download Playlist') : 'Download Track';
+    return target;
   }
 
   function getSystemPlaylistBlob() {
@@ -58,22 +65,69 @@
     return new Blob([`${lines.join('\n')}\n`], { type: 'application/vnd.apple.mpegurl' });
   }
 
-  function setLabel(text, title = text) {
+  function setLabel(state, text, title = text) {
+    const { button, label, icon } = state;
     if (label.textContent !== text) label.textContent = text;
     button.title = title;
     button.setAttribute('aria-label', title);
-    const state = text === 'Downloading…' ? 'loading' :
+    const iconState = text === 'Downloading…' ? 'loading' :
       text === 'Download complete!' ? 'complete' : text === 'Retry download' ? 'error' : 'ready';
-    if (button.dataset.state !== state) {
-      button.dataset.state = state;
+    if (button.dataset.state !== iconState) {
+      button.dataset.state = iconState;
       const paths = {
         ready: '<path d="M12 3.75V15M7.5 10.5 12 15l4.5-4.5M3.75 15.75v4.5h16.5v-4.5"/>',
         loading: '<circle cx="12" cy="12" r="8.25" stroke-dasharray="36 16"/>',
         complete: '<path d="m5.25 12 4.5 4.5 9-9"/>',
         error: '<path d="M18.75 8.25A7.5 7.5 0 1 0 19.5 12M18.75 3.75v4.5h-4.5"/>'
       };
-      icon.innerHTML = paths[state];
+      icon.innerHTML = paths[iconState];
     }
+  }
+
+  function cancelDownload(state) {
+    state.request?.abort();
+    state.request = null;
+    clearTimeout(state.resetTimer);
+    state.button.disabled = false;
+    state.button.removeAttribute('aria-busy');
+  }
+
+  function syncTarget(state) {
+    const target = state.getTarget();
+    if (target?.path !== state.path) {
+      cancelDownload(state);
+      state.path = target?.path;
+      if (target) setLabel(state, target.label);
+    }
+    return target;
+  }
+
+  function createButton(getTarget) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('aria-hidden', 'true');
+    icon.setAttribute('fill', 'none');
+    icon.setAttribute('stroke', 'currentColor');
+    icon.setAttribute('stroke-width', '1.5');
+    icon.setAttribute('stroke-linecap', 'square');
+    icon.setAttribute('width', '16');
+    icon.setAttribute('height', '16');
+    button.appendChild(icon);
+    const label = document.createElement('span');
+    label.setAttribute('aria-live', 'polite');
+    button.appendChild(label);
+    const state = { button, icon, label, getTarget };
+    downloads.set(button, state);
+    syncTarget(state);
+    button.addEventListener('click', event => {
+      // Track rows also handle clicks to start playback.
+      event.preventDefault();
+      event.stopPropagation();
+      download(state);
+    });
+    return button;
   }
 
   function getToolbar() {
@@ -89,6 +143,7 @@
   }
 
   function styleButton(toolbar) {
+    const { icon, label } = downloads.get(button);
     const ui = toolbar.modern ? 'modern' : 'legacy';
     const className = toolbar.modern ? `${toolbar.reference.className}${button.disabled ? ' Mui-disabled' : ''}` :
       'sc-button-secondary sc-button sc-button-medium';
@@ -111,16 +166,17 @@
     }
   }
 
-  async function download() {
-    const target = getDownload();
-    if (!target || request || target.path !== currentPath) return;
+  async function download(state) {
+    const target = syncTarget(state);
+    if (!target || state.request) return;
+    const { button } = state;
 
-    clearTimeout(resetTimer);
+    clearTimeout(state.resetTimer);
     const controller = new AbortController();
-    request = controller;
+    state.request = controller;
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
-    setLabel('Downloading…');
+    setLabel(state, 'Downloading…');
     const timeout = setTimeout(() => controller.abort(), 120000);
 
     try {
@@ -140,7 +196,7 @@
       if (target.playlist && !(await blob.text()).trimStart().startsWith('#EXTM3U')) {
         throw new Error('Download service returned an invalid playlist.');
       }
-      if (controller.signal.aborted || getDownload()?.path !== target.path) return;
+      if (controller.signal.aborted || !button.isConnected || state.getTarget()?.path !== target.path) return;
 
       const objectUrl = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
@@ -150,20 +206,20 @@
       anchor.click();
       anchor.remove();
       setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
-      setLabel('Download complete!');
+      setLabel(state, 'Download complete!');
     } catch (error) {
-      if (request !== controller || getDownload()?.path !== target.path) return;
+      if (state.request !== controller || !button.isConnected || state.getTarget()?.path !== target.path) return;
       const message = controller.signal.aborted ? 'Download timed out. Please try again.' : error.message;
-      setLabel('Retry download', message);
+      setLabel(state, 'Retry download', message);
       console.error('[Soundcloud Download Button]', message);
     } finally {
       clearTimeout(timeout);
-      if (request === controller) {
-        request = null;
+      if (state.request === controller) {
+        state.request = null;
         button.disabled = false;
         button.removeAttribute('aria-busy');
-        resetTimer = setTimeout(() => {
-          if (currentPath === target.path && !request) setLabel(target.label);
+        state.resetTimer = setTimeout(() => {
+          if (state.getTarget()?.path === target.path && !state.request) setLabel(state, target.label);
         }, 5000);
       }
     }
@@ -172,41 +228,14 @@
   function syncButton() {
     const target = getDownload();
     const toolbar = target && getToolbar();
-    if (target?.path !== currentPath) {
-      request?.abort();
-      request = null;
-      clearTimeout(resetTimer);
-      currentPath = target?.path;
-      if (button) {
-        button.disabled = false;
-        button.removeAttribute('aria-busy');
-        if (target) setLabel(target.label);
-      }
-    }
+    if (button) syncTarget(downloads.get(button));
     if (!toolbar) {
       button?.remove();
       return;
     }
     if (!button) {
-      button = toolbar.modern ? toolbar.reference.cloneNode(false) : document.createElement('button');
-      for (const attribute of ['aria-describedby', 'aria-controls', 'aria-owns', 'aria-haspopup', 'aria-expanded']) {
-        button.removeAttribute(attribute);
-      }
-      button.type = 'button';
+      button = createButton(getDownload);
       button.id = 'scr-download-button';
-      icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      icon.setAttribute('viewBox', '0 0 24 24');
-      icon.setAttribute('aria-hidden', 'true');
-      icon.setAttribute('fill', 'none');
-      icon.setAttribute('stroke', 'currentColor');
-      icon.setAttribute('stroke-width', '1.5');
-      icon.setAttribute('stroke-linecap', 'square');
-      button.appendChild(icon);
-      label = document.createElement('span');
-      label.setAttribute('aria-live', 'polite');
-      button.appendChild(label);
-      setLabel(target.label);
-      button.addEventListener('click', download);
     }
     styleButton(toolbar);
     if (button.parentElement !== toolbar.element) {
@@ -215,15 +244,58 @@
     }
   }
 
+  function syncQuickButton(container, getTarget, className, before = null) {
+    const target = getTarget();
+    let quick = container.querySelector('.scr-download-quick');
+    if (!target) {
+      quick?.remove();
+      return;
+    }
+    if (!quick) {
+      quick = createButton(getTarget);
+      quick.className = `sc-button-secondary sc-button sc-button-small scr-download-quick ${className}`;
+      downloads.get(quick).label.className = 'sc-visuallyhidden';
+      container.insertBefore(quick, before);
+    }
+    syncTarget(downloads.get(quick));
+  }
+
+  function syncButtons() {
+    syncButton();
+    // Card headers stay visible even when a playlist only previews a few tracks.
+    for (const header of document.querySelectorAll('.sound__header')) {
+      const container = header.querySelector('.soundTitle__titleContainer');
+      if (!container) continue;
+      syncQuickButton(container, () => getLinkDownload(
+        header.querySelector('.soundTitle__title'),
+        /^Album\b/i.test(header.querySelector('.releaseDateCompact')?.textContent.trim() || '')
+      ), 'scr-download-card', header.querySelector('.soundTitle__additionalContainer'));
+    }
+    for (const row of document.querySelectorAll('.trackItem')) {
+      // Keep our icon outside the native actions that only appear on hover.
+      const container = row.querySelector('.trackItem__additional');
+      if (!container) continue;
+      syncQuickButton(container, () => getLinkDownload(row.querySelector('.trackItem__trackTitle')), 'scr-download-track');
+    }
+    for (const [quick, state] of downloads) {
+      if (quick === button || quick.isConnected) continue;
+      cancelDownload(state);
+      downloads.delete(quick);
+    }
+  }
+
   const style = document.createElement('style');
   style.textContent = `
     .systemPlaylistDetails__controls > #scr-download-button { margin-right: 10px; }
-    #scr-download-button[data-ui="legacy"]:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
-    #scr-download-button[data-ui="legacy"]:disabled { opacity: .55; cursor: wait; }
-    #scr-download-button[data-state="loading"] svg { animation: scr-download-spin 1s linear infinite; }
+    .scr-download-quick { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 28px; min-width: 28px; height: 28px; padding: 0; margin-left: 8px; }
+    .scr-download-card { align-self: center; }
+    .scr-download-quick svg { pointer-events: none; }
+    #scr-download-button[data-ui="legacy"]:focus-visible, .scr-download-quick:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+    #scr-download-button[data-ui="legacy"]:disabled, .scr-download-quick:disabled { opacity: .55; cursor: wait; }
+    #scr-download-button[data-state="loading"] svg, .scr-download-quick[data-state="loading"] svg { animation: scr-download-spin 1s linear infinite; }
     @keyframes scr-download-spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) {
-      #scr-download-button[data-state="loading"] svg { animation: none; }
+      #scr-download-button[data-state="loading"] svg, .scr-download-quick[data-state="loading"] svg { animation: none; }
     }
   `;
   document.documentElement.appendChild(style);
@@ -234,12 +306,12 @@
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
-      syncButton();
+      syncButtons();
     });
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  window.addEventListener('popstate', syncButton);
+  window.addEventListener('popstate', syncButtons);
   // SoundCloud also changes routes with pushState without replacing the toolbar.
-  setInterval(syncButton, 500);
-  syncButton();
+  setInterval(syncButtons, 500);
+  syncButtons();
 })();
