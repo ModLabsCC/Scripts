@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Playables Volume
 // @namespace    ModLabs
-// @version      1.0.0
+// @version      1.0.0-GitHub
 // @description  Adds a hover volume slider to YouTube games, including WebAudio sound.
 // @author       ModLabs
 // @license      Apache License 2.0
