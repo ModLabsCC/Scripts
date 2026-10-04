@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         Soundcloud Download Button
 // @namespace    ModLabs
-// @version      1.3.2-GitHub
+// @version      1.3.3-GitHub
 // @description  A Script that adds a Download button to SoundCloud
 // @author       ModLabs
 // @license      Apache License 2.0
 // @match        https://soundcloud.com/*
+// @updateURL    https://raw.githubusercontent.com/ModLabsCC/Scripts/main/SoundcloudDownloadButton.js
+// @downloadURL  https://raw.githubusercontent.com/ModLabsCC/Scripts/main/SoundcloudDownloadButton.js
 // @grant        none
 // ==/UserScript==
 
